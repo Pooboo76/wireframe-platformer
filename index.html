@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wireframe Platformer</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050510; } /* Very dark blue */
+        canvas { display: block; }
+         #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: #eee;
+            font-family: monospace;
+            font-size: 14px;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Use A/D or Left/Right Arrows to Move, W or Up Arrow or Space to Jump</div>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js"
+            }
+        }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        
+        // Add error handling for Three.js loading
+        if (!THREE) {
+            console.error('Three.js failed to load');
+            document.getElementById('info').innerHTML = 'Error: Game failed to load. Please refresh the page.';
+        }
+
+        let scene, camera, renderer;
+        let player, playerVelocity, playerCollider;
+        let platforms = [];
+        let backgroundGrid;
+        let input = { left: false, right: false, jump: false };
+        let isOnGround = false;
+        let lastPlatformX = 0;
+        const platformScrollSpeed = 3.0; // Units per second
+
+        // Physics constants
+        const gravity = -25.0; // Units per second squared
+        const jumpVelocity = 9.0; // Initial upward velocity on jump
+        const playerMoveSpeed = 5.0; // Units per second
+
+        // Player dimensions (using Box for simplicity)
+        const playerWidth = 0.8;
+        const playerHeight = 1.0;
+        const playerDepth = 0.5; // Keep depth shallow for 2D feel
+
+        // Camera settings
+        const viewHeight = 10; // Controls the vertical zoom level
+
+        // Temporary objects for calculations
+        const tempBox = new THREE.Box3();
+        const playerDelta = new THREE.Vector3();
+
+        init();
+        animate();
+
+        function init() {
+            // --- Scene ---
+            scene = new THREE.Scene();
+
+            // --- Camera (Orthographic) ---
+            const aspect = window.innerWidth / window.innerHeight;
+            const viewWidth = viewHeight * aspect;
+            camera = new THREE.OrthographicCamera(
+                viewWidth / -2, viewWidth / 2, // left, right
+                viewHeight / 2, viewHeight / -2, // top, bottom
+                0.1, 100 // near, far
+            );
+            camera.position.set(0, viewHeight / 4, 10); // Position slightly up, looking along Z
+
+            // --- Renderer ---
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setClearColor(0x050510); // Set background color directly
+            document.body.appendChild(renderer.domElement);
+
+            // --- Player ---
+            createPlayer();
+
+            // --- Platforms ---
+            createInitialPlatforms();
+
+            // --- Background (Optional Grid) ---
+            createBackgroundGrid();
+
+            // --- Lighting (Not strictly needed for MeshBasicMaterial) ---
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5); // Add some ambient just in case
+            scene.add(ambientLight);
+
+            // --- Event Listeners ---
+            window.addEventListener('resize', onWindowResize);
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+        }
+
+        function createPlayer() {
+            // Using BoxGeometry for simplicity, Capsule would also work well
+            const geometry = new THREE.BoxGeometry(playerWidth, playerHeight, playerDepth);
+            const material = new THREE.MeshBasicMaterial({
+                color: 0x00ffff, // Neon Cyan
+                wireframe: true
+            });
+            player = new THREE.Mesh(geometry, material);
+            player.position.set(0, 2, 0); // Start slightly above the first platform
+            scene.add(player);
+
+            playerVelocity = new THREE.Vector3();
+            playerCollider = new THREE.Box3(); // Initialize collider
+            playerCollider.setFromObject(player); // Set initial size
+        }
+
+        function createPlatform(x, y, width, height = 0.5) {
+            const depth = 2; // Make platforms deep enough to see wireframe clearly
+            const geometry = new THREE.BoxGeometry(width, height, depth);
+            const material = new THREE.MeshBasicMaterial({
+                color: 0x8888cc, // Mid-tone purple/blue wireframe
+                wireframe: true
+            });
+            const platform = new THREE.Mesh(geometry, material);
+            platform.position.set(x + width / 2, y - height / 2, 0); // Position based on bottom-left corner + center offset
+
+            // Add collider directly to the mesh for convenience
+            platform.collider = new THREE.Box3().setFromObject(platform);
+
+            scene.add(platform);
+            platforms.push(platform);
+            lastPlatformX = Math.max(lastPlatformX, x + width); // Track rightmost edge
+            return platform;
+        }
+
+        function createInitialPlatforms() {
+            // Create a starting ground platform
+            createPlatform(-5, 0, 15);
+
+            // Add a few more platforms procedurally
+            let currentX = 10; // Start X for the next platform
+            for (let i = 0; i < 10; i++) {
+                const gap = Math.random() * 2 + 1; // Random gap size
+                const width = Math.random() * 4 + 2; // Random width
+                const heightOffset = (Math.random() - 0.5) * 3; // Random height change
+                createPlatform(currentX + gap, heightOffset, width);
+                currentX += gap + width;
+            }
+        }
+
+        function createBackgroundGrid() {
+            const gridSize = 100;
+            const gridDivisions = 50;
+            const gridGeometry = new THREE.PlaneGeometry(gridSize, gridSize, gridDivisions, gridDivisions);
+            const gridMaterial = new THREE.MeshBasicMaterial({
+                color: 0x222233, // Dark subtle grid color
+                wireframe: true,
+                transparent: true,
+                opacity: 0.5
+            });
+            backgroundGrid = new THREE.Mesh(gridGeometry, gridMaterial);
+            backgroundGrid.position.z = -10; // Place it behind the gameplay
+            scene.add(backgroundGrid);
+        }
+
+        // --- Update Logic ---
+
+        function handleInput(deltaTime) {
+            playerVelocity.x = 0; // Reset horizontal velocity each frame based on input
+
+            if (input.left) {
+                playerVelocity.x = -playerMoveSpeed;
+            }
+            if (input.right) {
+                playerVelocity.x = playerMoveSpeed;
+            }
+
+            // Handle Jump - only allow jumping if on the ground
+            if (input.jump && isOnGround) {
+                playerVelocity.y = jumpVelocity;
+                isOnGround = false;
+            }
+        }
+
+        function updatePhysics(deltaTime) {
+            // Apply gravity
+            playerVelocity.y += gravity * deltaTime;
+
+            // Calculate potential movement
+            playerDelta.copy(playerVelocity).multiplyScalar(deltaTime);
+
+            // --- Collision Detection & Resolution ---
+            // 1. Move Horizontally, Check, Resolve
+            player.position.x += playerDelta.x;
+            playerCollider.setFromObject(player); // Update collider position
+
+            isOnGround = false; // Assume not on ground until collision check proves otherwise
+
+            for (const platform of platforms) {
+                platform.collider.setFromObject(platform); // Update platform collider (needed if platforms move)
+                if (playerCollider.intersectsBox(platform.collider)) {
+                    const intersection = tempBox.copy(playerCollider).intersect(platform.collider);
+                    const intersectionSize = intersection.getSize(new THREE.Vector3());
+
+                    // Check if collision is primarily horizontal
+                    if (intersectionSize.x < intersectionSize.y) {
+                         // Collision is horizontal
+                        if (playerDelta.x > 0) { // Moving right
+                            player.position.x -= intersectionSize.x;
+                        } else if (playerDelta.x < 0) { // Moving left
+                            player.position.x += intersectionSize.x;
+                        }
+                        playerVelocity.x = 0; // Stop horizontal movement on collision
+                        playerCollider.setFromObject(player); // Update collider after correction
+                    }
+                }
+            }
+
+
+            // 2. Move Vertically, Check, Resolve
+            player.position.y += playerDelta.y;
+            playerCollider.setFromObject(player); // Update collider position
+
+            for (const platform of platforms) {
+                 platform.collider.setFromObject(platform); // Update platform collider
+                if (playerCollider.intersectsBox(platform.collider)) {
+                    const intersection = tempBox.copy(playerCollider).intersect(platform.collider);
+                    const intersectionSize = intersection.getSize(new THREE.Vector3());
+
+                    // Check if collision is primarily vertical
+                     if (intersectionSize.y < intersectionSize.x) {
+                        // Collision is vertical
+                        if (playerDelta.y > 0) { // Moving Up (hitting underside)
+                            player.position.y -= intersectionSize.y;
+                            playerVelocity.y = 0; // Stop upward movement
+                        } else if (playerDelta.y < 0) { // Moving Down (landing)
+                            player.position.y += intersectionSize.y;
+                            playerVelocity.y = 0; // Stop downward movement
+                            isOnGround = true; // Landed on a platform
+                        }
+                        playerCollider.setFromObject(player); // Update collider after correction
+                    }
+                }
+            }
+
+            // Simple floor boundary (prevent falling forever)
+            if (player.position.y < -viewHeight * 2) {
+                 // Reset player position or handle death/respawn
+                 player.position.set(camera.position.x, 5, 0);
+                 playerVelocity.set(0, 0, 0);
+                 isOnGround = false;
+            }
+        }
+
+        function updateLevel(deltaTime) {
+            const scrollAmount = platformScrollSpeed * deltaTime;
+            const cameraLeftEdge = camera.position.x - (camera.right - camera.left) / 2;
+            const cameraRightEdge = camera.position.x + (camera.right - camera.left) / 2;
+
+            // Move existing platforms left
+            for (let i = platforms.length - 1; i >= 0; i--) {
+                const platform = platforms[i];
+                platform.position.x -= scrollAmount;
+
+                // Update collider position
+                platform.collider.setFromObject(platform);
+
+                // Check if platform is off-screen to the left
+                const platformRightEdge = platform.position.x + platform.geometry.parameters.width / 2;
+                if (platformRightEdge < cameraLeftEdge - 5) { // Add buffer
+                    scene.remove(platform);
+                    platforms.splice(i, 1);
+                }
+            }
+
+            // Adjust player position to counteract scroll
+            player.position.x -= scrollAmount;
+            lastPlatformX -= scrollAmount; // Keep track of the scrolled rightmost edge
+
+            // Generate new platforms if needed
+            if (lastPlatformX < cameraRightEdge + 10) { // Generate when right edge approaches view + buffer
+                const gap = Math.random() * 3 + 1.5;
+                const width = Math.random() * 5 + 3;
+                const lastPlatform = platforms[platforms.length - 1];
+                const lastY = lastPlatform ? lastPlatform.position.y + lastPlatform.geometry.parameters.height / 2 : 0;
+                const heightOffset = lastY + (Math.random() - 0.5) * 4; // Vary height based on last platform
+
+                // Clamp height to prevent extreme jumps
+                const clampedY = Math.max(-viewHeight / 2 + 1, Math.min(viewHeight / 2 - 1, heightOffset));
+
+                createPlatform(lastPlatformX + gap, clampedY, width);
+            }
+
+             // Move background grid slower for parallax effect (optional)
+             if (backgroundGrid) {
+                 backgroundGrid.position.x -= scrollAmount * 0.2; // Scroll at 20% speed
+                 // Reset grid position to prevent it scrolling away forever
+                 const gridWidth = backgroundGrid.geometry.parameters.width;
+                 if (backgroundGrid.position.x < camera.position.x - gridWidth / 2) {
+                     backgroundGrid.position.x += gridWidth / 2; // Adjust as needed to keep it seamless
+                 }
+             }
+        }
+
+        function updateCamera(deltaTime) {
+            // Smoothly follow the player's intended center position (which is effectively 0 due to scrolling)
+            // Or, if you want the player to move within the screen a bit:
+            // const targetX = player.position.x + 2; // Keep player slightly ahead of center
+            const targetX = 2; // Keep camera slightly ahead of where the player *should* be after scroll compensation
+            camera.position.x = THREE.MathUtils.lerp(camera.position.x, targetX, 0.05);
+
+            // Optional: Slight vertical follow
+            // const targetY = THREE.MathUtils.clamp(player.position.y, 0, viewHeight / 2) + viewHeight / 4;
+            // camera.position.y = THREE.MathUtils.lerp(camera.position.y, targetY, 0.05);
+
+            camera.updateProjectionMatrix(); // Needed if changing camera properties, though not strictly here
+        }
+
+        // --- Animation Loop ---
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+            const deltaTime = Math.min(clock.getDelta(), 0.05); // Clamp delta time to prevent large jumps
+
+            handleInput(deltaTime);
+            updatePhysics(deltaTime);
+            updateLevel(deltaTime); // Update level scrolls platforms and player *before* camera update
+            updateCamera(deltaTime);
+
+            renderer.render(scene, camera);
+        }
+
+        // --- Event Handlers ---
+        function onWindowResize() {
+            const aspect = window.innerWidth / window.innerHeight;
+            const viewWidth = viewHeight * aspect;
+            camera.left = viewWidth / -2;
+            camera.right = viewWidth / 2;
+            camera.top = viewHeight / 2;
+            camera.bottom = viewHeight / -2;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onKeyDown(event) {
+            switch (event.code) {
+                case 'KeyA':
+                case 'ArrowLeft':
+                    input.left = true;
+                    break;
+                case 'KeyD':
+                case 'ArrowRight':
+                    input.right = true;
+                    break;
+                case 'KeyW':
+                case 'ArrowUp':
+                case 'Space':
+                    input.jump = true;
+                    break;
+            }
+        }
+
+        function onKeyUp(event) {
+            switch (event.code) {
+                case 'KeyA':
+                case 'ArrowLeft':
+                    input.left = false;
+                    break;
+                case 'KeyD':
+                case 'ArrowRight':
+                    input.right = false;
+                    break;
+                case 'KeyW':
+                case 'ArrowUp':
+                case 'Space':
+                    input.jump = false; // Reset jump request on key up
+                    break;
+            }
+        }
+
+    </script>
+</body>
+</html>
