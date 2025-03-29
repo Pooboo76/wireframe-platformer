@@ -24,12 +24,18 @@
     <script type="importmap">
         {
             "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+                "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js"
             }
         }
     </script>
     <script type="module">
         import * as THREE from 'three';
+        
+        // Add error handling for Three.js loading
+        if (!THREE) {
+            console.error('Three.js failed to load');
+            document.getElementById('info').innerHTML = 'Error: Game failed to load. Please refresh the page.';
+        }
 
         let scene, camera, renderer;
         let player, playerVelocity, playerCollider;
