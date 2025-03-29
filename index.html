@@ -63,8 +63,14 @@
         const tempBox = new THREE.Box3();
         const playerDelta = new THREE.Vector3();
 
-        init();
-        animate();
+        // Initialize game only after Three.js is loaded
+        try {
+            init();
+            animate();
+        } catch (error) {
+            console.error('Error initializing game:', error);
+            document.getElementById('info').innerHTML = 'Error: Game failed to initialize. Please refresh the page.';
+        }
 
         function init() {
             // --- Scene ---
@@ -327,15 +333,20 @@
         // --- Animation Loop ---
         const clock = new THREE.Clock();
         function animate() {
-            requestAnimationFrame(animate);
-            const deltaTime = Math.min(clock.getDelta(), 0.05); // Clamp delta time to prevent large jumps
+            try {
+                requestAnimationFrame(animate);
+                const deltaTime = Math.min(clock.getDelta(), 0.05); // Clamp delta time to prevent large jumps
 
-            handleInput(deltaTime);
-            updatePhysics(deltaTime);
-            updateLevel(deltaTime); // Update level scrolls platforms and player *before* camera update
-            updateCamera(deltaTime);
+                handleInput(deltaTime);
+                updatePhysics(deltaTime);
+                updateLevel(deltaTime);
+                updateCamera(deltaTime);
 
-            renderer.render(scene, camera);
+                renderer.render(scene, camera);
+            } catch (error) {
+                console.error('Error in animation loop:', error);
+                document.getElementById('info').innerHTML = 'Error: Game loop failed. Please refresh the page.';
+            }
         }
 
         // --- Event Handlers ---
